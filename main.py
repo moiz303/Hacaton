@@ -4,8 +4,10 @@ from datetime import datetime
 import json
 from typing import List
 
+
 class MergeRequestReport:
-    def __init__(self, id, title, link, created_at, merged_at, file_paths: List[str], positives: List[str]):
+    def __init__(self, id, title, link, created_at, merged_at, file_paths: List[str], positives: List[str],
+                 base_commit: str, head_commit: str):
         self.id = id
         self.title = title
         self.link = link
@@ -15,8 +17,11 @@ class MergeRequestReport:
         self.positives = positives
         self.flake8_issues = self.run_flake8()
         self.antipatterns = self.detect_antipatterns()
-        self.additions = self.estimate_additions()
-        self.deletions = 0  # можно доработать через Git diff
+
+        self.base_commit = base_commit
+        self.head_commit = head_commit
+
+        self.additions, self.deletions = self.estimate_changes()
 
     def run_flake8(self) -> List[str]:
         """Запускает flake8 на указанных файлах и возвращает список проблем."""
@@ -31,7 +36,7 @@ class MergeRequestReport:
         return issues
 
     def detect_antipatterns(self) -> List[str]:
-        """Простая эвристика для антипаттернов (можно улучшить)."""
+        """Простая эвристика для антипаттернов (можно улучшить)"""
         antipatterns = []
         for issue in self.flake8_issues:
             if 'E501' in issue:
@@ -42,9 +47,28 @@ class MergeRequestReport:
                 antipatterns.append("неиспользуемый импорт (F401)")
         return list(set(antipatterns))
 
-    def estimate_additions(self):
-        # Можно доработать через git diff, пока просто симуляция
-        return sum(os.path.getsize(path) // 50 for path in self.file_paths)  # очень грубая оценка
+    def estimate_changes(self):
+        additions = 0
+        deletions = 0
+        for path in self.file_paths:
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', '--numstat', self.base_commit, self.head_commit, '--', path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                for line in result.stdout.strip().split('\n'):
+                    if not line:
+                        continue
+                    add_str, del_str, _ = line.split('\t')
+                    if add_str != '-':
+                        additions += int(add_str)
+                    if del_str != '-':
+                        deletions += int(del_str)
+            except Exception as e:
+                print(f"Ошибка при анализе git diff для {path}: {e}")
+        return additions, deletions
 
     def size_category(self):
         total_changes = self.additions + self.deletions
