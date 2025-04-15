@@ -32,6 +32,30 @@ class MergeRequestReport:
                 'Metrics/CyclomaticComplexity': "слишком сложная функция",
                 'Lint/UnusedMethodArgument': "неиспользуемый аргумент метода"
             }
+        },
+        'java': {
+            'command': 'java -jar checkstyle-10.12.4-all.jar -c google_checks.xml',
+            'file_extensions': ['.java'],
+            'antipatterns': {
+                'JavadocMethod': "отсутствует Javadoc для метода",
+                'AvoidStarImport': "использование импорта через *",
+                'LineLength': "слишком длинная строка",
+                'CyclomaticComplexity': "слишком сложный метод",
+                'UnusedImports': "неиспользуемый импорт"
+            },
+            'output_parser': lambda x: x.split('\n')[1:-1]  # Парсинг вывода Checkstyle
+        },
+        'php': {
+            'command': 'phpcs',
+            'file_extensions': ['.php'],
+            'antipatterns': {
+                'PSR1.Methods.CamelCapsMethodName': "метод не в camelCase",
+                'Squiz.WhiteSpace.ScopeClosingBrace': "неправильный отступ закрывающей скобки",
+                'Generic.Files.LineLength': "слишком длинная строка",
+                'PSR12.Operators.SpreadOperatorSpacing': "неправильные пробелы вокруг ...",
+                'PSR2.Methods.MethodDeclaration.Underscore': "использование _ в именах методов"
+            },
+            'output_parser': lambda x: [line.strip() for line in x.split('\n') if line.strip()]
         }
     }
 
@@ -73,28 +97,41 @@ class MergeRequestReport:
         extensions = self.LINTERS_CONFIG[language]['file_extensions']
         return [f for f in file_paths if any(f.endswith(ext) for ext in extensions)]
 
+
     def run_linter(self) -> List[str]:
-        """Запускает соответствующий линтер для выбранного языка"""
         if self.language not in self.LINTERS_CONFIG:
             return []
 
-        linter_cmd = self.LINTERS_CONFIG[self.language]['command']
+        config = self.LINTERS_CONFIG[self.language]
         issues = []
 
         for path in self.file_paths:
             try:
+                # Специальная обработка Java (Checkstyle)
+                if self.language == 'java':
+                    cmd = config['command'].split() + [path]
+                else:
+                    cmd = [config['command'], path]
+
                 result = subprocess.run(
-                    [linter_cmd, path],
+                    cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True
                 )
+
                 if result.stdout:
-                    issues.extend(result.stdout.strip().split('\n'))
+                    output = result.stdout
+                    if 'output_parser' in config:
+                        issues.extend(config['output_parser'](output))
+                    else:
+                        issues.extend(output.strip().split('\n'))
+
             except Exception as e:
-                print(f"Ошибка при запуске {linter_cmd}: {e}")
+                print(f"Ошибка при запуске линтера {config['command']}: {e}")
 
         return issues
+
 
     def detect_antipatterns(self) -> List[str]:
         """Ищет антипаттерны для текущего языка"""
