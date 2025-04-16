@@ -1,3 +1,4 @@
+from test_all import MergeRequestReport
 from gitlab import Gitlab
 from typing import List, Tuple
 import datetime as dt
