@@ -5,7 +5,26 @@ import requests
 import subprocess
 from typing import List, Dict, Optional
 import datetime as dt
-import openai
+
+
+class DeepSeekAPI:
+    def __init__(self):
+        self.api_key = "sk-c036153a3e834d83b96d8988b4b6b66a"
+        self.base_url = "https://api.deepseek.com/v1"
+
+    def generate(self, model: str, prompt: str, max_tokens: int, temperature: float):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+        response = requests.post(f"{self.base_url}/completions", json=data, headers=headers)
+        return response.json()
 
 
 class MergeRequestReport:
@@ -44,7 +63,7 @@ class MergeRequestReport:
             base_commit: str,
             head_commit: str,
             language: str = 'python',
-            openai_api_key: Optional[str] = None
+            deepseek_api_key: Optional[str] = None
     ):
         self.created_at = created_at
         self.merged_at = merged_at
@@ -53,16 +72,14 @@ class MergeRequestReport:
         self.base_commit = base_commit
         self.head_commit = head_commit
 
-        if openai_api_key:
-            openai.api_key = openai_api_key
+        # Инициализация DeepSeek
+        self.deepseek = DeepSeekAPI() if deepseek_api_key else None
 
-        # Сначала получаем конфиг линтера
+        # Получаем конфиг линтера
         self.linter_config = self._get_linter_config()
 
-        # Теперь можно фильтровать файлы, так как linter_config уже существует
+        # Фильтрация и обработка файлов
         self.file_urls = self._filter_files_by_language(github_file_urls, language)
-
-        # Остальная инициализация
         self.temp_files = self._download_files()
         self.linter_issues = self.run_linter()
         self.antipatterns = self.detect_antipatterns()
@@ -70,40 +87,52 @@ class MergeRequestReport:
         self._cleanup_temp_files()
 
     def _get_linter_config(self) -> Dict:
-        """Получает конфигурацию линтера для текущего языка"""
+        """Получаем конфигурацию линтера через DeepSeek API"""
+        if not self.deepseek:
+            return self.BASE_LINTERS_CONFIG.get(self.language, {})
+
         try:
-            # Запрашиваем у OpenAI информацию о линтере
-            response = openai.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful programming assistant. Provide linter configuration in JSON format."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Provide configuration for {self.language} linter including command, file extensions, "
-                                   f"common antipatterns with their codes and descriptions in Russian. "
-                                   f"Return only valid JSON without any additional text."
-                    }
-                ]
+            prompt = (
+                f"Provide configuration for {self.language} linter including:\n"
+                "1. Command to run\n"
+                "2. File extensions\n"
+                "3. Common antipatterns with codes and Russian descriptions\n"
+                "Return only valid JSON without any additional text."
             )
 
-            config = eval(response.choices[0].message.content)
+            response = self.deepseek.generate(
+                model="deepseek-coder",
+                prompt=prompt,
+                max_tokens=1000,
+                temperature=0.3
+            )
 
-            # Объединяем с базовой конфигурацией (на случай, если OpenAI не вернул все поля)
+            # Парсинг ответа (может потребоваться адаптация под формат ответа DeepSeek)
+            config = self._parse_deepseek_response(response)
+
+            # Объединяем с базовой конфигурацией
             base_config = self.BASE_LINTERS_CONFIG.get(self.language, {})
             return {**base_config, **config}
 
         except Exception as e:
-            print(f"Error getting linter config from OpenAI: {e}")
-            # Fallback на базовую конфигурацию
+            print(f"Error getting linter config from DeepSeek: {e}")
             return self.BASE_LINTERS_CONFIG.get(self.language, {})
 
-    def _filter_files_by_language(self, urls: List[str], language: str) -> List[str]:
-        if not self.linter_config:
-            return []
+    def _parse_deepseek_response(self, response) -> Dict:
+        """Парсит ответ от DeepSeek API в словарь"""
+        # Реализация зависит от формата ответа DeepSeek API
+        # Это примерная реализация - возможно, потребуется адаптация
+        try:
+            # Предполагаем, что ответ содержит JSON в тексте
+            json_str = response.choices[0].text
+            return eval(json_str)
+        except Exception as e:
+            print(f"Error parsing DeepSeek response: {e}")
+            return {}
 
+    def _filter_files_by_language(self, urls: List[str], language: str) -> List[str]:
+        if not hasattr(self, 'linter_config') or not self.linter_config:
+            return []
         extensions = self.linter_config.get('file_extensions', [])
         return [url for url in urls if any(url.endswith(ext) for ext in extensions)]
 
@@ -212,9 +241,8 @@ if __name__ == '__main__':
         base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
         head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106",
         created_at=dt.datetime(2023, 11, 7),
-        merged_at=dt.datetime(2024, 5, 13)
+        merged_at=dt.datetime(2024, 5, 13),
     )
 
     # 📤 Печать отчёта
     print(json.dumps(example_mr.to_dict(), indent=4, ensure_ascii=False))
-
