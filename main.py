@@ -1,6 +1,7 @@
 import subprocess
 import os
 import json
+import datetime as dt
 import flake8
 from typing import List
 
@@ -99,3 +100,16 @@ class MergeRequestReport:
             "Antipatterns": self.antipatterns,
             "Positives": self.positives,
         }
+
+    # ▶️ Пример использования
+example_mr = MergeRequestReport(
+    created_at=dt.datetime(2023, 11, 21),
+    merged_at=dt.datetime(2024, 5, 17),
+    file_paths=["main.py"],  # файл, который хотим проанализировать - меняется твоим кодом
+    positives=["Хорошие тесты", "Чистый код"],
+    base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
+    head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106"
+)
+
+# 📤 Печать отчёта
+print(json.dumps(example_mr.to_dict(), indent=4, ensure_ascii=False))

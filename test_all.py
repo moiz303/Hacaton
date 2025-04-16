@@ -1,6 +1,5 @@
 import subprocess
 from typing import List, Dict, Optional
-from datetime import datetime
 import json
 
 
@@ -62,16 +61,12 @@ class MergeRequestReport:
 
     def __init__(
             self,
-            created_at: datetime,
-            merged_at: datetime,
             file_paths: List[str],
             positives: List[str],
             base_commit: str,
             head_commit: str,
             language: str = 'python'
     ):
-        self.created_at = created_at
-        self.merged_at = merged_at
         self.file_paths = self._filter_files_by_language(file_paths, language)
         self.positives = positives
         self.language = language.lower()
@@ -187,15 +182,11 @@ class MergeRequestReport:
         penalty = len(self.linter_issues) * 0.5 + len(self.antipatterns)
         return max(1, int(base - penalty))
 
-    def period(self) -> str:
-        """Возвращает период жизни MR"""
-        return f"{self.created_at.date()} — {self.merged_at.date()}"
 
     def to_dict(self) -> Dict:
         """Преобразует отчет в словарь"""
         return {
             "Language": self.language,
-            "Period": self.period(),
             "Size": self.size_category(),
             "Score": self.quality_score(),
             "Linter Issues": self.linter_issues,
@@ -209,8 +200,6 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        created_at=datetime(2023, 11, 21),
-        merged_at=datetime(2024, 5, 17),
         file_paths=["main.py"],  # файл, который хотим проанализировать - меняется твоим кодом
         positives=["Хорошие тесты", "Чистый код"],
         base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
