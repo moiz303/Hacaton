@@ -200,7 +200,8 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        file_paths=["main.py"],  # файл, который хотим проанализировать - меняется твоим кодом
+        file_paths=["test_all.py"],  # файл, который хотим проанализировать - меняется твоим кодом
+        language="python",
         positives=["Хорошие тесты", "Чистый код"],
         base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
         head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106"
