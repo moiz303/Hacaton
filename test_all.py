@@ -1,191 +1,198 @@
+import json
+import os
+import tempfile
+import requests
 import subprocess
 from typing import List, Dict, Optional
-import json
+import datetime as dt
+import openai
 
 
 class MergeRequestReport:
-    # Конфигурация линтеров для разных языков
-    LINTERS_CONFIG = {
+    # Базовые настройки для линтеров (можно использовать как fallback)
+    BASE_LINTERS_CONFIG = {
         'python': {
             'command': 'flake8',
             'file_extensions': ['.py'],
-            'antipatterns': {
-                'E501': "слишком длинная строка",
-                'C901': "слишком сложная функция",
-                'F401': "неиспользуемый импорт"
-            }
         },
         'javascript': {
             'command': 'eslint',
             'file_extensions': ['.js', '.jsx', '.ts', '.tsx'],
-            'antipatterns': {
-                'no-unused-vars': "неиспользуемая переменная",
-                'complexity': "слишком сложная функция",
-                'max-len': "слишком длинная строка"
-            }
         },
         'ruby': {
             'command': 'rubocop',
             'file_extensions': ['.rb'],
-            'antipatterns': {
-                'Metrics/LineLength': "слишком длинная строка",
-                'Metrics/CyclomaticComplexity': "слишком сложная функция",
-                'Lint/UnusedMethodArgument': "неиспользуемый аргумент метода"
-            }
         },
         'java': {
             'command': 'java -jar checkstyle-10.12.4-all.jar -c google_checks.xml',
             'file_extensions': ['.java'],
-            'antipatterns': {
-                'JavadocMethod': "отсутствует Javadoc для метода",
-                'AvoidStarImport': "использование импорта через *",
-                'LineLength': "слишком длинная строка",
-                'CyclomaticComplexity': "слишком сложный метод",
-                'UnusedImports': "неиспользуемый импорт"
-            },
-            'output_parser': lambda x: x.split('\n')[1:-1]  # Парсинг вывода Checkstyle
+            'output_parser': lambda x: x.split('\n')[1:-1]
         },
         'php': {
             'command': 'phpcs',
             'file_extensions': ['.php'],
-            'antipatterns': {
-                'PSR1.Methods.CamelCapsMethodName': "метод не в camelCase",
-                'Squiz.WhiteSpace.ScopeClosingBrace': "неправильный отступ закрывающей скобки",
-                'Generic.Files.LineLength': "слишком длинная строка",
-                'PSR12.Operators.SpreadOperatorSpacing': "неправильные пробелы вокруг ...",
-                'PSR2.Methods.MethodDeclaration.Underscore': "использование _ в именах методов"
-            },
             'output_parser': lambda x: [line.strip() for line in x.split('\n') if line.strip()]
         }
     }
 
     def __init__(
             self,
-            file_paths: List[str],
+            created_at,
+            merged_at,
+            github_file_urls: List[str],
             positives: List[str],
             base_commit: str,
             head_commit: str,
-            language: str = 'python'
+            language: str = 'python',
+            openai_api_key: Optional[str] = None
     ):
-        self.file_paths = self._filter_files_by_language(file_paths, language)
-        self.positives = positives
+        self.created_at = created_at
+        self.merged_at = merged_at
         self.language = language.lower()
-
+        self.positives = positives
         self.base_commit = base_commit
         self.head_commit = head_commit
 
-        # Аналитические данные
+        if openai_api_key:
+            openai.api_key = openai_api_key
+
+        # Сначала получаем конфиг линтера
+        self.linter_config = self._get_linter_config()
+
+        # Теперь можно фильтровать файлы, так как linter_config уже существует
+        self.file_urls = self._filter_files_by_language(github_file_urls, language)
+
+        # Остальная инициализация
+        self.temp_files = self._download_files()
         self.linter_issues = self.run_linter()
         self.antipatterns = self.detect_antipatterns()
         self.additions, self.deletions = self.estimate_changes()
+        self._cleanup_temp_files()
 
-    def _filter_files_by_language(self, file_paths: List[str], language: str) -> List[str]:
-        """Фильтрует файлы по расширениям, соответствующим языку"""
-        if language not in self.LINTERS_CONFIG:
-            raise ValueError(f"Unsupported language: {language}")
+    def _get_linter_config(self) -> Dict:
+        """Получает конфигурацию линтера для текущего языка"""
+        try:
+            # Запрашиваем у OpenAI информацию о линтере
+            response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful programming assistant. Provide linter configuration in JSON format."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Provide configuration for {self.language} linter including command, file extensions, "
+                                   f"common antipatterns with their codes and descriptions in Russian. "
+                                   f"Return only valid JSON without any additional text."
+                    }
+                ]
+            )
 
-        extensions = self.LINTERS_CONFIG[language]['file_extensions']
-        return [f for f in file_paths if any(f.endswith(ext) for ext in extensions)]
+            config = eval(response.choices[0].message.content)
 
+            # Объединяем с базовой конфигурацией (на случай, если OpenAI не вернул все поля)
+            base_config = self.BASE_LINTERS_CONFIG.get(self.language, {})
+            return {**base_config, **config}
+
+        except Exception as e:
+            print(f"Error getting linter config from OpenAI: {e}")
+            # Fallback на базовую конфигурацию
+            return self.BASE_LINTERS_CONFIG.get(self.language, {})
+
+    def _filter_files_by_language(self, urls: List[str], language: str) -> List[str]:
+        if not self.linter_config:
+            return []
+
+        extensions = self.linter_config.get('file_extensions', [])
+        return [url for url in urls if any(url.endswith(ext) for ext in extensions)]
+
+    def _download_files(self) -> Dict[str, str]:
+        """Скачивает файлы по ссылке и сохраняет во временные файлы"""
+        temp_files = {}
+        for url in self.file_urls:
+            try:
+                response = requests.get(url)
+                response.raise_for_status()
+                ext = os.path.splitext(url)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=ext, mode='w', encoding='utf-8') as tmp_file:
+                    tmp_file.write(response.text)
+                    temp_files[url] = tmp_file.name
+            except Exception as e:
+                print(f"Ошибка при загрузке {url}: {e}")
+        return temp_files
 
     def run_linter(self) -> List[str]:
-        if self.language not in self.LINTERS_CONFIG:
+        if not self.linter_config:
             return []
 
-        config = self.LINTERS_CONFIG[self.language]
         issues = []
-
-        for path in self.file_paths:
+        for url, local_path in self.temp_files.items():
             try:
-                # Специальная обработка Java (Checkstyle)
-                if self.language == 'java':
-                    cmd = config['command'].split() + [path]
-                else:
-                    cmd = [config['command'], path]
-
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
+                cmd = (
+                    self.linter_config['command'].split() + [local_path]
+                    if self.language == 'java' else
+                    [self.linter_config['command'], local_path]
                 )
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-                if result.stdout:
-                    output = result.stdout
-                    if 'output_parser' in config:
-                        issues.extend(config['output_parser'](output))
+                output = result.stdout.strip()
+                if output:
+                    if 'output_parser' in self.linter_config:
+                        issues.extend(self.linter_config['output_parser'](output))
                     else:
-                        issues.extend(output.strip().split('\n'))
+                        issues.extend(output.split('\n'))
 
             except Exception as e:
-                print(f"Ошибка при запуске линтера {config['command']}: {e}")
-
+                print(f"Ошибка линтинга {url}: {e}")
         return issues
 
-
     def detect_antipatterns(self) -> List[str]:
-        """Ищет антипаттерны для текущего языка"""
-        if self.language not in self.LINTERS_CONFIG:
+        if not self.linter_config or 'antipatterns' not in self.linter_config:
             return []
 
-        antipatterns_config = self.LINTERS_CONFIG[self.language]['antipatterns']
-        found_antipatterns = []
+        patterns = self.linter_config['antipatterns']
+        found = []
 
         for issue in self.linter_issues:
-            for code, description in antipatterns_config.items():
+            for code, description in patterns.items():
                 if code in issue:
-                    found_antipatterns.append(description)
+                    found.append(description)
 
-        return list(set(found_antipatterns))
+        return list(set(found))
 
     def estimate_changes(self) -> tuple[int, int]:
-        """Подсчитывает добавления и удаления через git diff"""
-        additions = 0
-        deletions = 0
+        # Эмуляция - у нас нет git diff, но можно добавить API GitHub диффа
+        # Здесь пока просто нули
+        return 0, 0
 
-        for path in self.file_paths:
+    def _cleanup_temp_files(self):
+        for path in self.temp_files.values():
             try:
-                result = subprocess.run(
-                    ['git', 'diff', '--numstat', self.base_commit, self.head_commit, '--', path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                for line in result.stdout.strip().split('\n'):
-                    if not line:
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) >= 2:
-                        add_str, del_str = parts[0], parts[1]
-                        if add_str != '-':
-                            additions += int(add_str)
-                        if del_str != '-':
-                            deletions += int(del_str)
+                os.remove(path)
             except Exception as e:
-                print(f"Ошибка при анализе git diff для {path}: {e}")
-
-        return additions, deletions
+                print(f"Не удалось удалить временный файл {path}: {e}")
 
     def size_category(self) -> str:
-        """Классифицирует MR по размеру изменений"""
         total_changes = self.additions + self.deletions
         if total_changes <= 50:
             return 'S'
         elif total_changes <= 300:
             return 'M'
-        else:
-            return 'L'
+        return 'L'
 
     def quality_score(self) -> int:
-        """Вычисляет оценку качества кода"""
         base = 10
         penalty = len(self.linter_issues) * 0.5 + len(self.antipatterns)
         return max(1, int(base - penalty))
 
+    def period(self):
+        return f"{self.created_at.date()} — {self.merged_at.date()}"
 
     def to_dict(self) -> Dict:
         """Преобразует отчет в словарь"""
         return {
+            "Period": self.period(),
             "Language": self.language,
             "Size": self.size_category(),
             "Score": self.quality_score(),
@@ -200,12 +207,14 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        file_paths=["test_all.py"],  # файл, который хотим проанализировать - меняется твоим кодом
-        language="python",
+        github_file_urls=["https://raw.githubusercontent.com/moiz303/Hacaton/refs/heads/master/back.py"],  # файл, который хотим проанализировать
         positives=["Хорошие тесты", "Чистый код"],
         base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
-        head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106"
+        head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106",
+        created_at=dt.datetime(2023, 11, 7),
+        merged_at=dt.datetime(2024, 5, 13)
     )
 
     # 📤 Печать отчёта
     print(json.dumps(example_mr.to_dict(), indent=4, ensure_ascii=False))
+

@@ -195,7 +195,7 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        github_file_urls=["https://raw.githubusercontent.com/moiz303/lode_runner/refs/heads/master/main.py"],  # файл, который хотим проанализировать
+        github_file_urls=["https://raw.githubusercontent.com/moiz303/Hacaton/refs/heads/master/test_all.py"],  # файл, который хотим проанализировать
         positives=["Хорошие тесты", "Чистый код"],
         base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
         head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106",
