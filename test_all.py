@@ -1,6 +1,7 @@
 import subprocess
 from typing import List, Dict, Optional
 from datetime import datetime
+import json
 
 
 class MergeRequestReport:
@@ -61,9 +62,6 @@ class MergeRequestReport:
 
     def __init__(
             self,
-            id: str,
-            title: str,
-            link: str,
             created_at: datetime,
             merged_at: datetime,
             file_paths: List[str],
@@ -72,9 +70,6 @@ class MergeRequestReport:
             head_commit: str,
             language: str = 'python'
     ):
-        self.id = id
-        self.title = title
-        self.link = link
         self.created_at = created_at
         self.merged_at = merged_at
         self.file_paths = self._filter_files_by_language(file_paths, language)
@@ -199,9 +194,6 @@ class MergeRequestReport:
     def to_dict(self) -> Dict:
         """Преобразует отчет в словарь"""
         return {
-            "ID": self.id,
-            "Title": self.title,
-            "Link": self.link,
             "Language": self.language,
             "Period": self.period(),
             "Size": self.size_category(),
@@ -212,3 +204,18 @@ class MergeRequestReport:
             "Additions": self.additions,
             "Deletions": self.deletions,
         }
+
+
+if __name__ == '__main__':
+    # ▶️ Пример использования
+    example_mr = MergeRequestReport(
+        created_at=datetime(2023, 11, 21),
+        merged_at=datetime(2024, 5, 17),
+        file_paths=["main.py"],  # файл, который хотим проанализировать - меняется твоим кодом
+        positives=["Хорошие тесты", "Чистый код"],
+        base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
+        head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106"
+    )
+
+    # 📤 Печать отчёта
+    print(json.dumps(example_mr.to_dict(), indent=4, ensure_ascii=False))
