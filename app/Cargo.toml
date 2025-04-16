@@ -1,0 +1,11 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.40"
+eframe = "0.31.1"
+email_address = "0.2.9"
+pyo3 = { version = "0.24.1", features = ["extension-module"] }
+url = "2.5.4"
