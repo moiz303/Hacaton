@@ -3,14 +3,14 @@ import os
 import tempfile
 import requests
 import subprocess
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import datetime as dt
 
 
 class DeepSeekAPI:
     def __init__(self):
         self.api_key = "sk-c036153a3e834d83b96d8988b4b6b66a"
-        self.base_url = "https://api.deepseek.com/v1"
+        self.base_url = "https://api.deepseek.com/beta"
 
     def generate(self, model: str, prompt: str, max_tokens: int, temperature: float):
         headers = {
@@ -60,20 +60,20 @@ class MergeRequestReport:
             merged_at,
             github_file_urls: List[str],
             positives: List[str],
-            base_commit: str,
-            head_commit: str,
-            language: str = 'python',
-            deepseek_api_key: Optional[str] = None
+            language: str = 'python'
     ):
         self.created_at = created_at
         self.merged_at = merged_at
         self.language = language.lower()
         self.positives = positives
-        self.base_commit = base_commit
-        self.head_commit = head_commit
+        self.repo_path = os.path.abspath("") # Сохраняем абсолютный путь
+
+        # Получаем коммиты по датам
+        self.base_commit = self._get_commit_by_date(created_at)
+        self.head_commit = self._get_commit_by_date(merged_at)
 
         # Инициализация DeepSeek
-        self.deepseek = DeepSeekAPI() if deepseek_api_key else None
+        self.deepseek = DeepSeekAPI()
 
         # Получаем конфиг линтера
         self.linter_config = self._get_linter_config()
@@ -123,6 +123,7 @@ class MergeRequestReport:
         # Реализация зависит от формата ответа DeepSeek API
         # Это примерная реализация - возможно, потребуется адаптация
         try:
+            print(response)
             # Предполагаем, что ответ содержит JSON в тексте
             json_str = response.choices[0].text
             return eval(json_str)
@@ -190,10 +191,63 @@ class MergeRequestReport:
 
         return list(set(found))
 
-    def estimate_changes(self) -> tuple[int, int]:
-        # Эмуляция - у нас нет git diff, но можно добавить API GitHub диффа
-        # Здесь пока просто нули
-        return 0, 0
+    def _get_commit_by_date(self, target_date: dt.datetime) -> str:
+        """Возвращает последний коммит до указанной даты в локальном репозитории."""
+        date_str = target_date.strftime("%Y-%m-%d %H:%M:%S")
+        cmd = [
+            "git", "-C", self.repo_path, "log",
+            "--until", date_str,
+            "--format=%H",
+            "-n", "1",
+            "HEAD"
+        ]
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"Git error: {result.stderr}")
+            return result.stdout.strip()
+        except Exception as e:
+            print(f"Error getting commit by date: {e}")
+            return ""
+
+    def estimate_changes(self) -> Tuple[int, int]:
+        """Calculate additions and deletions between commits in local repo."""
+        if not self.base_commit or not self.head_commit:
+            return 0, 0
+
+        try:
+            cmd = [
+                'git', '-C', self.repo_path, 'diff',
+                '--numstat',
+                '--diff-filter=AM',
+                f"{self.base_commit}..{self.head_commit}"  # Используем диапазон коммитов
+            ]
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+
+            additions = deletions = 0
+            for line in result.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) >= 2:
+                    try:
+                        additions += int(parts[0]) if parts[0].isdigit() else 0
+                        deletions += int(parts[1]) if parts[1].isdigit() else 0
+                    except ValueError:
+                        continue
+
+            return additions, deletions
+
+        except subprocess.CalledProcessError as e:
+            print(f"Git diff error: {e.stderr}")
+            return 0, 0
+        except Exception as e:
+            print(f"Error estimating changes: {e}")
+            return 0, 0
 
     def _cleanup_temp_files(self):
         for path in self.temp_files.values():
@@ -236,12 +290,10 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        github_file_urls=["https://raw.githubusercontent.com/moiz303/Hacaton/refs/heads/master/back.py"],  # файл, который хотим проанализировать
+        github_file_urls=["https://github.com/moiz303/lode_runner/blob/master/levels.py"],  # файл, который хотим проанализировать
         positives=["Хорошие тесты", "Чистый код"],
-        base_commit="db57f1e98583824741154d37312c5a727ecac3a6",
-        head_commit="c364b98e7f068e49e004bbd301dc1f68dd0fb106",
-        created_at=dt.datetime(2023, 11, 7),
-        merged_at=dt.datetime(2024, 5, 13),
+        created_at=dt.datetime(2023, 12, 23),
+        merged_at=dt.datetime(2025, 4, 17),
     )
 
     # 📤 Печать отчёта
