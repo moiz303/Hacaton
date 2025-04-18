@@ -1,3 +1,4 @@
+import datetime
 def generate_report(input_data, output_file):
     """
     Генерирует отчёт в формате .rpt из входных данных JSON.
