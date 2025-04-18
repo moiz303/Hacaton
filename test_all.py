@@ -9,8 +9,10 @@ import datetime as dt
 
 class DeepSeekAPI:
     def __init__(self):
-        self.api_key = "sk-c036153a3e834d83b96d8988b4b6b66a"
-        self.base_url = "https://api.deepseek.com/beta"
+        #self.api_key = "sk-c036153a3e834d83b96d8988b4b6b66a"
+        self.api_key = "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"
+        #self.api_key = "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"
+        self.base_url = "https://openrouter.ai/api/v1/chat"
 
     def generate(self, model: str, prompt: str, max_tokens: int, temperature: float):
         headers = {
@@ -56,8 +58,8 @@ class MergeRequestReport:
 
     def __init__(
             self,
-            created_at,
-            merged_at,
+            created_at: dt.datetime,
+            merged_at: dt.datetime,
             github_file_urls: List[str],
             positives: List[str],
             language: str = 'python'
@@ -97,13 +99,13 @@ class MergeRequestReport:
                 "1. Command to run\n"
                 "2. File extensions\n"
                 "3. Common antipatterns with codes and Russian descriptions\n"
-                "Return only valid JSON without any additional text."
+                "Return only valid JSON with first 20 antipatterns without any additional text."
             )
 
             response = self.deepseek.generate(
-                model="deepseek-coder",
+                model="deepseek/deepseek-chat:free",
                 prompt=prompt,
-                max_tokens=1000,
+                max_tokens=2500,
                 temperature=0.3
             )
 
@@ -118,18 +120,62 @@ class MergeRequestReport:
             print(f"Error getting linter config from DeepSeek: {e}")
             return self.BASE_LINTERS_CONFIG.get(self.language, {})
 
-    def _parse_deepseek_response(self, response) -> Dict:
-        """Парсит ответ от DeepSeek API в словарь"""
-        # Реализация зависит от формата ответа DeepSeek API
-        # Это примерная реализация - возможно, потребуется адаптация
+    def _parse_deepseek_response(self, response: dict) -> dict:
+        """Парсит ответ от DeepSeek API"""
+        # Default values if parsing fails
+        default_result = {
+            'command': 'flake8',
+            'file_extensions': ['.py'],
+            'antipatterns': {}
+        }
+
         try:
-            print(response)
-            # Предполагаем, что ответ содержит JSON в тексте
-            json_str = response.choices[0].text
-            return eval(json_str)
+            # 1. Validate response structure
+            if not isinstance(response, dict):
+                print("Error: Response is not a dictionary")
+                return default_result
+
+            if 'choices' not in response or not response['choices']:
+                print("Error: No 'choices' in response")
+                return default_result
+
+            first_choice = response['choices'][0]['text']
+            if not first_choice:
+                print("Error: No 'text' in choices")
+                return default_result
+
+            # 2. Parse JSON content
+            try:
+                content = json.loads(first_choice[7:-4])
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {e}")
+                return default_result
+
+            # 3. Extract command and extensions
+            result = {
+                'command': content.get('command', default_result['command']),
+                'file_extensions': content.get('extensions', default_result['file_extensions']),
+                'antipatterns': {}
+            }
+
+            # 4. Process antipatterns
+            antipatterns = content.get('antipatterns', [])
+            if not isinstance(antipatterns, list):
+                print("Warning: 'antipatterns' is not a list")
+                return result
+
+            for item in antipatterns:
+                if isinstance(item, dict):
+                    code = item.get('code', '').strip()
+                    desc = item.get('description', '').strip()
+                    if code and desc:
+                        result['antipatterns'][code] = desc
+
+            return result
+
         except Exception as e:
-            print(f"Error parsing DeepSeek response: {e}")
-            return {}
+            print(f"Unexpected error: {str(e)}")
+            return default_result
 
     def _filter_files_by_language(self, urls: List[str], language: str) -> List[str]:
         if not hasattr(self, 'linter_config') or not self.linter_config:
@@ -145,7 +191,12 @@ class MergeRequestReport:
                 response = requests.get(url)
                 response.raise_for_status()
                 ext = os.path.splitext(url)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=ext, mode='w', encoding='utf-8') as tmp_file:
+                with tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=ext,
+                        mode='w',
+                        encoding='utf-8'
+                ) as tmp_file:
                     tmp_file.write(response.text)
                     temp_files[url] = tmp_file.name
             except Exception as e:
@@ -153,28 +204,45 @@ class MergeRequestReport:
         return temp_files
 
     def run_linter(self) -> List[str]:
-        if not self.linter_config:
+        if not self.linter_config or not hasattr(self, 'temp_files') or not self.temp_files:
             return []
 
         issues = []
         for url, local_path in self.temp_files.items():
             try:
-                cmd = (
-                    self.linter_config['command'].split() + [local_path]
-                    if self.language == 'java' else
-                    [self.linter_config['command'], local_path]
-                )
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                # Формируем команду для линтера
+                base_cmd = self.linter_config['command'].split()
+                if self.language == 'java':
+                    cmd = base_cmd + [local_path]
+                else:
+                    cmd = [self.linter_config['command'], local_path]
 
+                # Выполняем линтер
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    check=False  # Не бросаем исключение при ненулевом коде возврата
+                )
+
+                # Обрабатываем вывод
                 output = result.stdout.strip()
+                if not output and result.stderr:
+                    output = result.stderr.strip()
+
                 if output:
                     if 'output_parser' in self.linter_config:
                         issues.extend(self.linter_config['output_parser'](output))
                     else:
                         issues.extend(output.split('\n'))
 
+            except FileNotFoundError as e:
+                print(f"Линтер не найден: {e}")
             except Exception as e:
-                print(f"Ошибка линтинга {url}: {e}")
+                print(f"Неожиданная ошибка при линтинге {url}: {e}")
+
         return issues
 
     def detect_antipatterns(self) -> List[str]:
@@ -290,10 +358,11 @@ class MergeRequestReport:
 if __name__ == '__main__':
     # ▶️ Пример использования
     example_mr = MergeRequestReport(
-        github_file_urls=["https://github.com/moiz303/lode_runner/blob/master/levels.py"],  # файл, который хотим проанализировать
+        github_file_urls=["https://github.com/moiz303/Hacaton/blob/master/test_all.py",
+                          "https://github.com/moiz303/lode_runner/blob/master/main.py"],  # файлы, который хотим проанализировать
         positives=["Хорошие тесты", "Чистый код"],
         created_at=dt.datetime(2023, 12, 23),
-        merged_at=dt.datetime(2025, 4, 17),
+        merged_at=dt.datetime(2025, 4, 16),
     )
 
     # 📤 Печать отчёта
