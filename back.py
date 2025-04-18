@@ -2,7 +2,7 @@ import argparse
 import requests
 import tempfile
 import subprocess
-from main import generate_report  # Импортируем функцию из main.py
+from smth import generate_report  # Импортируем функцию из main.py
 
 def parse_github_url(url):
     """
