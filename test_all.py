@@ -239,7 +239,7 @@ class MergeRequestReport:
                         issues.extend(output.split('\n'))
 
             except FileNotFoundError as e:
-                print(f"Линтер не найден: {e}")
+                print(f"Линтер не найден: {e}. Проверьте, установлен ли он")
             except Exception as e:
                 print(f"Неожиданная ошибка при линтинге {url}: {e}")
 
