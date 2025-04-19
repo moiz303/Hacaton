@@ -1,5 +1,7 @@
 use eframe::egui;
-use email_address::EmailAddress;
+use std::process::Command;
+
+const PYTHON_EXECUTABLE: &str = "python3";
 fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Alfa Developers Qualification",
@@ -10,7 +12,6 @@ fn main() -> Result<(), eframe::Error> {
 
 #[derive(Default)]
 struct MyApp {
-    email: String,
     start_date: String,
     end_date: String,
     link: String,
@@ -60,14 +61,6 @@ impl eframe::App for MyApp {
 
                 ui.vertical(|ui| {
                     ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.label("Email:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.email)
-                                .hint_text("Enter developer's email"),
-                        );
-                    });
-                    ui.add_space(10.0);
 
                     ui.horizontal(|ui| {
                         ui.label("Start Date:");
@@ -94,10 +87,6 @@ impl eframe::App for MyApp {
                     });
 
                     if ui.button("Submit").clicked() {
-                        if self.email.is_empty() {
-                            self.result = "Email is required.".to_string();
-                            return;
-                        }
                         if self.start_date.is_empty() {
                             self.result = "Start date is required.".to_string();
                             return;
@@ -106,14 +95,16 @@ impl eframe::App for MyApp {
                             self.result = "End date is required.".to_string();
                             return;
                         }
-                        if !EmailAddress::is_valid(&self.email) {
-                            self.result = "Invalid email format.".to_string();
+                        if self.link.is_empty() {
+                            self.result = "Link is required.".to_string();
                             return;
                         }
-                        self.result = format!(
-                            "Submitted Email: {}\nSubmitted Start Date: {}\nSubmitted End Date: {}",
-                            self.email, self.start_date, self.end_date
-                        );
+                        if let Err(_) = url::Url::parse(&self.link) {
+                            self.result = "Invalid URL.".to_string();
+                            return;
+                        }
+
+                        self.result = execute(&self.start_date, &self.end_date, &self.link)
                     }
                 });
             });
@@ -130,13 +121,42 @@ impl eframe::App for MyApp {
                 ui.with_layout(
                     egui::Layout::top_down_justified(egui::Align::Center),
                     |ui| {
-                        ui.add_sized(
-                            ui.available_size(), // Fill all available space
-                            egui::Label::new(&self.result),
-                        );
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                                ui.add_sized(
+                                    ui.available_size(), // Fill all available space
+                                    egui::Label::new(&self.result),
+                                );
+                            });
                     },
                 );
             });
         });
+    }
+}
+
+fn execute(start_date: &str, end_date: &str, link: &str) -> String {
+    let output = Command::new(PYTHON_EXECUTABLE)
+        .arg("../back.py")
+        .arg("--urls")
+        .arg(link)
+        .arg("--start-date")
+        .arg(start_date)
+        .arg("--end-date")
+        .arg(end_date)
+        .arg("--output")
+        .arg("code_quality_report.rpt")
+        .output()
+        .expect("Failed to execute command");
+    if output.status.success() {
+        let content = std::fs::read_to_string("code_quality_report.rpt")
+            .expect("Failed to read output file")
+            .to_string();
+        return content;
+    } else {
+        let content = output.stdout;
+        let content = String::from_utf8_lossy(&content);
+        return content.to_string();
     }
 }
